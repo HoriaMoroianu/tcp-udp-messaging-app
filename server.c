@@ -4,17 +4,23 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
 #include "utils.h"
 
 #define MAX_BUFF 256
+#define MAX_CONN 32
 
-void chat(int connfd);
+void manage_server(int serverfd);
 
 int main(int argc, char *argv[])
 {
+	// Disable buffering
+	setvbuf(stdout, NULL, _IONBF, BUFSIZ);
+
 	DIE(argc != 2, "Usage: ./server <SERVER_PORT>");
 
 	// TODO: other user input errors
@@ -45,48 +51,109 @@ int main(int argc, char *argv[])
 	DIE(rc == -1, "Server bind failed!");
 
 	// Listen for connections
-	rc = listen(serverfd, 1);
+	rc = listen(serverfd, MAX_CONN);
 	DIE(rc == -1, "Server listen failed!");
 
-	// Create client address structure
-	struct sockaddr_in conn_addr;
-	socklen_t caddr_len = sizeof(conn_addr);
-	memset(&conn_addr, 0, caddr_len);
-
-	// Accept connection from new client
-	int connfd = accept(serverfd, (struct sockaddr *)&conn_addr, &caddr_len);
-	DIE(connfd == -1, "Connection failed!");
-
-	printf("Client connected to the server...\n");
-	
-	chat(connfd);
-
-	close(connfd);
+	manage_server(serverfd);
 	close(serverfd);
 
 	return 0;
 }
 
-void chat(int connfd)
+void manage_server(int serverfd)
 {
-	char buff[MAX_BUFF];
+	struct pollfd pfds[MAX_CONN];
+	int pfds_size = 2;
+
+	pfds[0].fd = serverfd;
+	pfds[0].events = POLLIN;
+
+	pfds[1].fd = STDIN_FILENO;
+	pfds[1].events = POLLIN;
 
 	while (1) {
-		bzero(buff, MAX_BUFF);
-		recv(connfd, buff, sizeof(buff), 0);
+		int poll_count = poll(pfds, pfds_size, -1);
+		DIE(poll_count == -1, "Server poll error");
 
-		printf("[CLIENT]: %s\n[SERVER]: ", buff);
+		for (int i = 0; i < pfds_size; i++) {
+			// Check if someone's ready to read
+			if (!(pfds[i].revents & POLLIN))
+				continue;
 
-		bzero(buff, MAX_BUFF);
-		fgets(buff, MAX_BUFF, stdin);
-		if (buff[strlen(buff) - 1] == '\n')
-			buff[strlen(buff) - 1] = '\0';
+			if (pfds[i].fd == serverfd) {
+				// Create client address structure
+				struct sockaddr_in conn_addr;
+				socklen_t caddr_len = sizeof(conn_addr);
+				memset(&conn_addr, 0, caddr_len);
 
-		send(connfd, buff, strlen(buff), 0);
+				// Accept connection from new client
+				int connfd = accept(serverfd, (struct sockaddr *)&conn_addr, &caddr_len);
+				DIE(connfd == -1, "Connection failed!");
 
-		if (strncmp("exit", buff, 4) == 0) { 
-			printf("Server Exit...\n"); 
-			break; 
+				// TODO: check for overflow
+				// Add to poll fd
+				pfds[pfds_size].fd = connfd;
+				pfds[pfds_size].events = POLLIN;
+				pfds_size++;
+
+				// TODO: id client
+				char con_adr_string[INET_ADDRSTRLEN];
+				printf("New client <ID_CLIENT> connected from %s:%hu.\n", 
+						inet_ntop(AF_INET, &conn_addr.sin_addr.s_addr, con_adr_string, INET_ADDRSTRLEN),
+						ntohs(conn_addr.sin_port));
+
+				continue;
+			}
+
+			if (pfds[i].fd == STDIN_FILENO) {
+				char buff[MAX_BUFF];
+				bzero(buff, MAX_BUFF);
+
+				fgets(buff, MAX_BUFF, stdin);
+				if (buff[strlen(buff) - 1] == '\n')
+					buff[strlen(buff) - 1] = '\0';
+
+				if ((strncmp(buff, "exit", 4)) == 0) {
+					printf("Server Exit...\n");
+					for (int j = 0; j < pfds_size; j++) {
+						if (pfds[j].fd != serverfd && pfds[j].fd != STDIN_FILENO)
+							close(pfds[j].fd);
+					}
+					return;
+				}
+
+				for (int j = 2; j < pfds_size; j++) {
+					if (pfds[j].fd != serverfd && pfds[j].fd != STDIN_FILENO)
+						send(pfds[j].fd, buff, strlen(buff), 0);
+				}
+				continue;
+			}
+
+			// Client:
+			char buff[MAX_BUFF];
+
+			bzero(buff, MAX_BUFF);
+			int rc = recv(pfds[i].fd, buff, sizeof(buff), 0);
+			DIE(rc == -1, "Error when recieving message");
+
+			if (rc == 0) {
+				// Connection closed
+
+				// TODO: id client
+				printf("Client <ID_CLIENT> disconnected.\n");
+				close(pfds[i].fd);
+
+				// TODO: remove from pdfs
+				pfds[i].fd = -1;
+				continue;
+			}
+
+			printf("[CLIENT]: %s\n", buff);
+
+			for (int j = 0; j < pfds_size; j++) {
+				if (pfds[j].fd != serverfd && pfds[j].fd != pfds[i].fd)
+					send(pfds[j].fd, buff, strlen(buff), 0);
+			}
 		}
 	}
 }

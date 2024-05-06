@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -12,10 +13,13 @@
 
 #define MAX_BUFF 256
 
-void chat(int serverfd);
+void manage_connection(int serverfd);
 
 int main(int argc, char *argv[])
 {
+	// Disable buffering
+	setvbuf(stdout, NULL, _IONBF, BUFSIZ);
+
 	DIE(argc != 4, "Usage: ./subscriber <CLIENT_ID> <SERVER_IP> <SERVER_PORT>");
 
 	// TODO: other user input errors
@@ -46,34 +50,54 @@ int main(int argc, char *argv[])
 	rc = connect(serverfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
 	DIE(rc == -1, "Failed to connect to server!");
 
-	chat(serverfd);
+	manage_connection(serverfd);
 
 	close(serverfd);
 
 	return 0;
 }
 
-void chat(int serverfd)
+void manage_connection(int serverfd)
 {
-	char buff[MAX_BUFF];
+	struct pollfd pfds[2];
+
+	pfds[0].fd = serverfd;
+	pfds[0].events = POLLIN;
+
+	pfds[1].fd = STDIN_FILENO;
+	pfds[1].events = POLLIN;
 
 	while (1) {
-		printf("[CLIENT]: ");
+		int poll_count = poll(pfds, 2, -1);
+		DIE(poll_count == -1, "Subscriber poll error");
 
-		bzero(buff, MAX_BUFF);
-		fgets(buff, MAX_BUFF, stdin);
-		if (buff[strlen(buff) - 1] == '\n')
-			buff[strlen(buff) - 1] = '\0';
+		if (pfds[0].revents & POLLIN) {
+			char buff[MAX_BUFF];
+			bzero(buff, MAX_BUFF);
 
-		send(serverfd, buff, strlen(buff), 0);
+			int rc = recv(serverfd, buff, sizeof(buff), 0);
+			DIE(rc == -1, "Error when recieving message");
 
-		if ((strncmp(buff, "exit", 4)) == 0) {
-			printf("Client Exit...\n");
-			break;
+			if (rc == 0)
+				return;
+			
+			printf("[SERVER]: %s\n", buff);
 		}
 
-		bzero(buff, sizeof(buff));
-		recv(serverfd, buff, sizeof(buff), 0);
-		printf("[SERVER]: %s\n", buff);
+		if (pfds[1].revents & POLLIN) {
+			char buff[MAX_BUFF];
+			bzero(buff, MAX_BUFF);
+
+			fgets(buff, MAX_BUFF, stdin);
+			if (buff[strlen(buff) - 1] == '\n')
+				buff[strlen(buff) - 1] = '\0';
+
+			if ((strncmp(buff, "exit", 4)) == 0) {
+				printf("Client Exit...\n");
+				return;
+			}
+
+			send(serverfd, buff, strlen(buff), 0);
+		}
 	}
 }
