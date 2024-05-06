@@ -2,17 +2,17 @@
 
 .PHONY: server subscriber clean
 
-server: server.c
-	gcc -o server server.c -Wall -Wextra
+server: server.cpp
+	g++ -std=c++17 -Wall -Wextra server.cpp -o server
 
-subscriber: tcp_client.c
-	gcc -o subscriber tcp_client.c -Wall -Wextra
+subscriber: tcp_client.cpp
+	g++ -std=c++17 -Wall -Wextra tcp_client.cpp -o subscriber
 
 clean:
 	rm -f server subscriber
 
-make run_server: server
+run_server: server
 	./server 1331
 
-make run_subscriber: subscriber
+run_subscriber: subscriber
 	./subscriber 123 127.0.0.1 1331

@@ -1,13 +1,8 @@
 // Copyright (c) 2024 Horia-Valentin MOROIANU
 
-#include <stdio.h>
-#include <stdint.h>
-#include <string.h>
-#include <unistd.h>
-#include <poll.h>
-#include <netinet/in.h>
+#include <bits/stdc++.h>
 #include <arpa/inet.h>
-#include <sys/socket.h>
+#include <poll.h>
 
 #include "utils.h"
 
