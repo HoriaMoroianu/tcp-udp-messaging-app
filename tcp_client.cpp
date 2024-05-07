@@ -1,12 +1,15 @@
 // Copyright (c) 2024 Horia-Valentin MOROIANU
 
 #include <bits/stdc++.h>
+#include <sys/socket.h>
 #include <arpa/inet.h>
 #include <poll.h>
 
 #include "utils.h"
 
-#define MAX_BUFF 256
+using namespace std;
+
+#define MAX_BUFF 1600
 
 void manage_connection(int serverfd);
 
@@ -45,6 +48,11 @@ int main(int argc, char *argv[])
 	rc = connect(serverfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
 	DIE(rc == -1, "Failed to connect to server!");
 
+	struct packet pack;
+	pack.type = CONNECT;
+	strcpy(pack.sub.client_id, argv[1]);
+	send_packet(serverfd, &pack);
+
 	manage_connection(serverfd);
 
 	close(serverfd);
@@ -55,17 +63,14 @@ int main(int argc, char *argv[])
 void manage_connection(int serverfd)
 {
 	struct pollfd pfds[2];
-
-	pfds[0].fd = serverfd;
-	pfds[0].events = POLLIN;
-
-	pfds[1].fd = STDIN_FILENO;
-	pfds[1].events = POLLIN;
+	pfds[0] = { serverfd, POLLIN, 0 };
+	pfds[1] = { STDIN_FILENO, POLLIN, 0 };
 
 	while (1) {
 		int poll_count = poll(pfds, 2, -1);
 		DIE(poll_count == -1, "Subscriber poll error");
 
+		// From server
 		if (pfds[0].revents & POLLIN) {
 			char buff[MAX_BUFF];
 			bzero(buff, MAX_BUFF);
@@ -73,12 +78,14 @@ void manage_connection(int serverfd)
 			int rc = recv(serverfd, buff, sizeof(buff), 0);
 			DIE(rc == -1, "Error when recieving message");
 
+			// Server disconected
 			if (rc == 0)
 				return;
 			
 			printf("[SERVER]: %s\n", buff);
 		}
 
+		// From stdin
 		if (pfds[1].revents & POLLIN) {
 			char buff[MAX_BUFF];
 			bzero(buff, MAX_BUFF);

@@ -3,10 +3,10 @@
 .PHONY: server subscriber clean
 
 server: server.cpp
-	g++ -std=c++17 -Wall -Wextra server.cpp -o server
+	g++ -std=c++17 -Wall -Wextra -g server.cpp utils.cpp -o server
 
 subscriber: tcp_client.cpp
-	g++ -std=c++17 -Wall -Wextra tcp_client.cpp -o subscriber
+	g++ -std=c++17 -Wall -Wextra -g tcp_client.cpp utils.cpp -o subscriber
 
 clean:
 	rm -f server subscriber
