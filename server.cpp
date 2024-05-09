@@ -13,6 +13,7 @@ using namespace std;
 #define MAX_BUFF 1600
 #define MAX_CONN_Q 16
 
+// TODO: fix this
 // UDP sensor...
 #define TOPIC_SIZE 50
 #define TYPE_INDEX 50
@@ -29,8 +30,6 @@ bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic)
 
 int main(int argc, char *argv[])
 {
-	// TODO: disble Nagle!
-
 	// Disable buffering
 	setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
@@ -43,32 +42,28 @@ int main(int argc, char *argv[])
 	// Create TCP server socket
 	const int tcpfd = socket(AF_INET, SOCK_STREAM, 0);
 	DIE(tcpfd == -1, "Error when creating TCP server socket!");
+	disable_nagle(tcpfd);
 
 	// Create UDP server socket
 	const int udpfd = socket(AF_INET, SOCK_DGRAM, 0);
 	DIE(udpfd == -1, "Error when creating UDP server socket!");
 
 	// Make server socket address reusable
-	const int enable = 1;
-	int rc = setsockopt(tcpfd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int));
-	DIE(rc == -1, "Error when setting reusable address!");
-
-	rc = setsockopt(udpfd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int));
-	DIE(rc == -1, "Error when setting reusable address!");
+	reusable_address(tcpfd);
+	reusable_address(udpfd);
 
 	// Create server address structure
-	struct sockaddr_in serv_addr;
-	memset(&serv_addr, 0, sizeof(serv_addr));
-
+	struct sockaddr_in serv_addr = { };
+	socklen_t addr_len = sizeof(serv_addr);
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	serv_addr.sin_port = htons(server_port);
 
 	// Bind server socket to address
-	rc = bind(tcpfd, (const struct sockaddr *)&serv_addr, sizeof(serv_addr));
+	int rc = bind(tcpfd, (const struct sockaddr *)&serv_addr, addr_len);
 	DIE(rc == -1, "Server bind failed!");
 
-	rc = bind(udpfd, (const struct sockaddr *)&serv_addr, sizeof(serv_addr));
+	rc = bind(udpfd, (const struct sockaddr *)&serv_addr, addr_len);
 	DIE(rc == -1, "Server bind failed!");
 
 	// Listen for connections
@@ -77,8 +72,10 @@ int main(int argc, char *argv[])
 
 	manage_server(tcpfd, udpfd);
 
-	close(tcpfd);
-	close(udpfd);
+	rc = close(tcpfd);
+	DIE(rc == -1, "Error when closing file descriptor");
+	rc = close(udpfd);
+	DIE(rc == -1, "Error when closing file descriptor");
 
 	return 0;
 }
@@ -87,7 +84,6 @@ void manage_server(int tcpfd, int udpfd)
 {
 	// Key: client_id; Value: client_fd
 	map<string, int> active_conn;
-
 	// Key: topic; Value: client_id
 	map<vector<string>, vector<string>> database;
 
@@ -141,9 +137,7 @@ void manage_server(int tcpfd, int udpfd)
 			}
 
 			// Client:
-			struct packet pack;
-			memset((void *)&pack, 0, sizeof(packet));
-
+			struct packet pack = { };
 			int rc = recv_packet(pfds[i].fd, &pack);
 			DIE(rc == -1, "Error when recieving message");
 
@@ -155,7 +149,6 @@ void manage_server(int tcpfd, int udpfd)
 
 				pfds.erase(pfds.begin() + i);
 				active_conn.erase(client_id);
-
 				continue;
 			}
 
@@ -190,13 +183,13 @@ void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
 
 	// Accept connection from new client
 	int connfd = accept(tcpfd, (struct sockaddr *)&conn_addr, &caddr_len);
-	DIE(connfd == -1, "Connection failed!");				
+	DIE(connfd == -1, "Connection failed!");
+	disable_nagle(connfd);		
 
 	// TODO: check already connected
-	struct packet pack;
-	memset((void *)&pack, 0, sizeof(packet));
+	struct packet pack = { };
 	int rc = recv_packet(connfd, &pack);
-	DIE(rc <= 0 || pack.type != CONNECT, "Connection failed!");
+	DIE(rc == -1 || pack.type != CONNECT, "Connection failed!");
 
 	if (active_conn.find(pack.sub.client_id) != active_conn.end()) {
 		cout << "Client " << pack.sub.client_id << " already connected.\n";

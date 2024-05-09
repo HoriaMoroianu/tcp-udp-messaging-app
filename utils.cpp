@@ -2,6 +2,8 @@
 
 #include <bits/stdc++.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/tcp.h>
 
 #include "utils.h"
 
@@ -43,6 +45,20 @@ ssize_t send_packet(int sockfd, void *buffer)
 		bytes_remaining -= rc;
 	}
 	return sent_bytes;
+}
+
+void disable_nagle(int sockfd)
+{
+	const int enable = 1;
+	int rc = setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &enable, sizeof(int));
+	DIE(rc == -1, "Error when diableing Nagle!");
+}
+
+void reusable_address(int sockfd)
+{
+	const int enable = 1;
+	int rc = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int));
+	DIE(rc == -1, "Error when setting reusable address!");
 }
 
 uint16_t check_input_port(const char *raw_input_port)

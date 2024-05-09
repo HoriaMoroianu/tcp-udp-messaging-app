@@ -9,8 +9,6 @@
 
 using namespace std;
 
-#define MAX_BUFF 1600
-
 void manage_connection(int serverfd, char *myid);
 void unpack(struct packet &pack);
 
@@ -29,18 +27,16 @@ int main(int argc, char *argv[])
 	DIE(rc != 1, "Invalid server ip!");
 
 	// Parse server port
-	uint16_t server_port;
-	rc = sscanf(argv[3], "%hu", &server_port);
-	DIE(rc != 1, "Invalid server port!");
+	uint16_t server_port = check_input_port(argv[3]);
 
 	// Create server socket
 	const int serverfd = socket(AF_INET, SOCK_STREAM, 0);
 	DIE(serverfd == -1, "Error when creating server socket!");
+	disable_nagle(serverfd);
 
 	// Create server address structure
-	struct sockaddr_in serv_addr;
+	struct sockaddr_in serv_addr = { };
 	memset(&serv_addr, 0, sizeof(serv_addr));
-
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_port = htons(server_port);
 	serv_addr.sin_addr.s_addr = server_ip;
@@ -50,15 +46,15 @@ int main(int argc, char *argv[])
 	DIE(rc == -1, "Failed to connect to server!");
 
 	// Send client id to server
-	struct packet pack;
-	memset((void *)&pack, 0, sizeof(packet));
-
+	struct packet pack = { };
 	pack.type = CONNECT;
 	memcpy(pack.sub.client_id, argv[1], strlen(argv[1]));
 	send_packet(serverfd, &pack);
 
 	manage_connection(serverfd, argv[1]);
-	close(serverfd);
+
+	rc = close(serverfd);
+	DIE(rc == -1, "Error when closing file descriptor");
 
 	return 0;
 }
@@ -66,40 +62,37 @@ int main(int argc, char *argv[])
 void manage_connection(int serverfd, char *myid)
 {
 	struct pollfd pfds[2];
-	pfds[0] = { serverfd, POLLIN, 0 };
-	pfds[1] = { STDIN_FILENO, POLLIN, 0 };
+	pfds[0] = { STDIN_FILENO, POLLIN, 0 };
+	pfds[1] = { serverfd, POLLIN, 0 };
 
 	while (1) {
 		int poll_count = poll(pfds, 2, -1);
 		DIE(poll_count == -1, "Subscriber poll error");
 
 		// From server
-		if (pfds[0].revents & POLLIN) {
-			struct packet pack;
-			memset((void *)&pack, 0, sizeof(packet));
-
+		if (pfds[1].revents & POLLIN) {
+			struct packet pack = { };
 			int rc = recv_packet(serverfd, &pack);
 			DIE(rc == -1, "Error when recieving message");
 
 			// Server disconected
 			if (rc == 0)
 				return;
-			
+
 			if (pack.type == DATA)
 				unpack(pack);
 		}
 
 		// From stdin
-		if (pfds[1].revents & POLLIN) {
-			char command[MAX_BUFF];
+		if (pfds[0].revents & POLLIN) {
+			string command;
 			cin >> command;
 
-			if ((strcmp(command, "exit")) == 0)
+			if (command == "exit")
 				return;
 			
-			if (strcmp(command, "subscribe") == 0) {
-				packet pack;
-				memset((void *)&pack, 0, sizeof(packet));
+			if (command == "subscribe") {
+				struct packet pack = { };
 
 				pack.type = FOLLOW;
 				memcpy(pack.sub.client_id, myid, strlen(myid));
@@ -112,9 +105,8 @@ void manage_connection(int serverfd, char *myid)
 				continue;
 			}
 
-			if (strcmp(command, "unsubscribe") == 0) {
-				packet pack;
-				memset((void *)&pack, 0, sizeof(packet));
+			if (command == "unsubscribe") {
+				struct packet pack = { };
 
 				pack.type = FOLLOW;
 				memcpy(pack.sub.client_id, myid, strlen(myid));
@@ -148,9 +140,11 @@ string get_data_type(uint8_t type)
 string parse_payload(uint8_t type, char *payload)
 {
 	string output = "";
+
 	if (type == INT) {
 		if (payload[0] == 1)
 			output.append("-");
+
 		uint32_t val;
 		memcpy(&val, &payload[1], sizeof(uint32_t));
 		return output.append(to_string(ntohl(val)));
@@ -173,14 +167,12 @@ string parse_payload(uint8_t type, char *payload)
 		memcpy(&val, &payload[1], sizeof(uint32_t));
 		int prec = (uint8_t)payload[5];
 
-		// cout << "PREC: " << pow(10, -prec);
-
 		stringstream temp;
-		temp << fixed << setprecision(prec) << ((double)ntohl(val) / pow(10, prec));
+		temp << fixed << setprecision(prec) 
+			 << (double)ntohl(val) / pow(10, prec);
 		return output.append(temp.str());
-		// return output;
 	}
-
+	// type == STRING
 	return payload;
 }
 

@@ -69,6 +69,8 @@ struct packet {
 
 ssize_t recv_packet(int sockfd, void *buffer);
 ssize_t send_packet(int sockfd, void *buffer);
+void disable_nagle(int sockfd);
+void reusable_address(int sockfd);
 uint16_t check_input_port(const char *raw_input_port);
 
 #endif
