@@ -12,6 +12,7 @@ using namespace std;
 #define MAX_BUFF 1600
 
 void manage_connection(int serverfd, char *myid);
+void unpack(struct packet &pack);
 
 int main(int argc, char *argv[])
 {
@@ -74,17 +75,18 @@ void manage_connection(int serverfd, char *myid)
 
 		// From server
 		if (pfds[0].revents & POLLIN) {
-			char buff[MAX_BUFF];
-			bzero(buff, MAX_BUFF);
+			struct packet pack;
+			memset((void *)&pack, 0, sizeof(packet));
 
-			int rc = recv(serverfd, buff, sizeof(buff), 0);
+			int rc = recv_packet(serverfd, &pack);
 			DIE(rc == -1, "Error when recieving message");
 
 			// Server disconected
 			if (rc == 0)
 				return;
 			
-			printf("[SERVER]: %s\n", buff);
+			if (pack.type == DATA)
+				unpack(pack);
 		}
 
 		// From stdin
@@ -125,4 +127,71 @@ void manage_connection(int serverfd, char *myid)
 			}
 		}
 	}
+}
+
+string get_data_type(uint8_t type)
+{
+	switch (type) {
+		case INT:
+			return "INT";
+		case SHORT_REAL:
+			return "SHORT_REAL";
+		case FLOAT:
+			return "FLOAT";
+		case STRING:
+			return "STRING";
+		default:
+			return "";
+	}
+}
+
+string parse_payload(uint8_t type, char *payload)
+{
+	string output = "";
+	if (type == INT) {
+		if (payload[0] == 1)
+			output.append("-");
+		uint32_t val;
+		memcpy(&val, &payload[1], sizeof(uint32_t));
+		return output.append(to_string(ntohl(val)));
+	}
+
+	if (type == SHORT_REAL) {
+		uint16_t val;
+		memcpy(&val, &payload[0], sizeof(uint16_t));
+
+		stringstream temp;
+		temp << fixed << setprecision(2) << (float)ntohs(val) / 100;
+		return output.append(temp.str());
+	}
+
+	if (type == FLOAT) {
+		if (payload[0] == 1)
+			output.append("-");
+
+		uint32_t val;
+		memcpy(&val, &payload[1], sizeof(uint32_t));
+		int prec = (uint8_t)payload[5];
+
+		// cout << "PREC: " << pow(10, -prec);
+
+		stringstream temp;
+		temp << fixed << setprecision(prec) << ((double)ntohl(val) / pow(10, prec));
+		return output.append(temp.str());
+		// return output;
+	}
+
+	return payload;
+}
+
+void unpack(struct packet &pack)
+{
+	char udp_ip[INET_ADDRSTRLEN];
+	const char *ret = inet_ntop(AF_INET, &pack.data.udp_ip, udp_ip,
+								INET_ADDRSTRLEN);
+	DIE(ret == NULL, "Invalid UDP IP!");
+
+	cout << udp_ip << ":" << ntohs(pack.data.udp_port) << " - " 
+		 << pack.data.topic << " - " << get_data_type(pack.data.dtype) << " - " 
+		 << parse_payload(pack.data.dtype, pack.data.payload) << "\n";
 }

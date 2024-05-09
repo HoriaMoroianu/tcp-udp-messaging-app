@@ -10,7 +10,7 @@
 
 using namespace std;
 
-#define MAX_BUFF sizeof(packet)
+#define MAX_BUFF 1600
 #define MAX_CONN_Q 16
 
 // UDP sensor...
@@ -19,12 +19,13 @@ using namespace std;
 #define DATA_INDEX 51
 
 void manage_server(int tcpfd, int udpfd);
-struct packet recv_sdata(int udpfd);
+void recv_data(int udpfd, struct packet &pack);
 string getid_by_fd(int fd, map<string, int> &active_conn);
-int read_from_stdin(vector<struct pollfd> &pfds);
+bool close_server(vector<struct pollfd> &pfds);
 void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
 						map<string, int> &active_conn);
 void split_topic(char *topic, vector<string> &words);
+bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic);
 
 int main(int argc, char *argv[])
 {
@@ -96,23 +97,6 @@ void manage_server(int tcpfd, int udpfd)
 	pfds.push_back({ udpfd, POLLIN, 0 });
 
 	while (1) {
-		// TODO: remove
-		cout << "\nActive conn:" << pfds.size() << "\n";
-		cout << "Subs:" << database.size() << "\n";
-
-		// TODO: remove after working
-		// cout << "\n";
-		// for (auto pair : database) {
-		// 	cout << "Topic: ";
-		// 	for (auto word : pair.first)
-		// 		cout << word << " ";
-		// 	cout << "\nFds: ";
-		// 	for (auto fd : pair.second)
-		// 		cout << fd << " ";
-		// 	cout << "\n";
-		// }
-		// cout << "\n";
-
 		int poll_count = poll(pfds.data(), pfds.size(), -1);
 		DIE(poll_count == -1, "Server poll error");
 
@@ -123,7 +107,7 @@ void manage_server(int tcpfd, int udpfd)
 
 			// Input from stdin
 			if (pfds[i].fd == STDIN_FILENO) {
-				if (read_from_stdin(pfds))
+				if (close_server(pfds))
 					return;
 				continue;
 			}
@@ -136,9 +120,23 @@ void manage_server(int tcpfd, int udpfd)
 
 			// UDP message
 			if (pfds[i].fd == udpfd) {
-				struct packet sdata = recv_sdata(udpfd);
-				(void)sdata;
-				// TODO: sent to all clients
+				struct packet pack;
+				memset((void *)&pack, 0, sizeof(packet));
+
+				recv_data(udpfd, pack);
+				vector<string> udptopic;
+				split_topic(pack.data.topic, udptopic);
+
+				for (auto pair : database) {
+					if (topic_match(udptopic, pair.first)) {
+						for (auto client_id : pair.second) {
+							if (active_conn.find(client_id) != active_conn.end()) {
+								int rc = send_packet(active_conn[client_id], &pack);
+								DIE(rc == -1, "Error when sending message");
+							}
+						}
+					}
+				}
 				continue;
 			}
 
@@ -220,41 +218,40 @@ void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
 		 << ":" << ntohs(conn_addr.sin_port) << ".\n";
 }
 
-int read_from_stdin(vector<struct pollfd> &pfds)
+bool close_server(vector<struct pollfd> &pfds)
 {
-	char buff[MAX_BUFF] = {0};
-	fgets(buff, MAX_BUFF, stdin);
+	string input;
+	getline(cin, input);
 
-	if (!(strncmp(buff, "exit", 4))) {
+	if (input == "exit") {
 		for (size_t i = 3; i < pfds.size(); i++)
 			close(pfds[i].fd);
-		return 1;
+		return true;
 	}
-	return 0;
+	return false;
 }
 
-struct packet recv_sdata(int udpfd)
+void recv_data(int udpfd, struct packet &pack)
 {
-	struct packet sdata;
 	char buff[MAX_BUFF] = {0};
 
-	struct sockaddr_in conn_addr;
-	socklen_t caddr_len = sizeof(conn_addr);
-	memset(&conn_addr, 0, caddr_len);
+	struct sockaddr_in udp_addr;
+	socklen_t adr_len = sizeof(udp_addr);
+	memset(&udp_addr, 0, adr_len);
 
 	ssize_t recv_bytes = recvfrom(udpfd, (char *)&buff, MAX_BUFF, 0, 
-								  (struct sockaddr *)&conn_addr, &caddr_len);
+								  (struct sockaddr *)&udp_addr, &adr_len);
 	DIE(recv_bytes == -1, "Error when recieving message");
 
-	sdata.type = SDATA;
-	sdata.data.udp_ip = conn_addr.sin_addr.s_addr;
-	sdata.data.udp_port = conn_addr.sin_port;
-	sdata.data.len = recv_bytes - TOPIC_SIZE;
-	memcpy(&sdata.data.topic, buff, TOPIC_SIZE);
-	sdata.data.dtype = buff[TYPE_INDEX];
-	memcpy(&sdata.data, &buff[DATA_INDEX], sdata.data.len);
-
-	return sdata;
+	// TODO: check packet format
+	pack.type = DATA;
+	pack.data.udp_ip = udp_addr.sin_addr.s_addr;
+	pack.data.udp_port = udp_addr.sin_port;
+	pack.data.len = recv_bytes - TOPIC_SIZE;
+	memcpy(&pack.data.topic, buff, TOPIC_SIZE);
+	pack.data.dtype = buff[TYPE_INDEX];
+	memcpy(&pack.data.payload, &buff[DATA_INDEX], pack.data.len);
+	pack.data.len = htons(pack.data.len);
 }
 
 string getid_by_fd(int fd, map<string, int> &active_conn)
@@ -273,4 +270,16 @@ void split_topic(char *topic, vector<string> &words)
 
 	while (getline(topic_stream, word, '/'))
 		words.push_back(word);
+}
+
+bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic)
+{
+	if (udptopic.size() != tcptopic.size())
+		return false;
+	
+	for (size_t i = 0; i < udptopic.size(); i++) {
+		if (udptopic[i] != tcptopic[i])
+			return false;
+	}
+	return true;
 }

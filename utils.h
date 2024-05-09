@@ -29,10 +29,15 @@ using namespace std;
 
 #define CONNECT 1
 #define FOLLOW 2
-#define	SDATA 3
+#define	DATA 3
 
 #define UNSUBSCRIBE 0
 #define SUBSCRIBE 1
+
+#define INT 0
+#define SHORT_REAL 1
+#define FLOAT 2
+#define STRING 3
 
 #define MIN_PORT_VALUE 1024
 #define MAX_PORT_VALUE 65535
@@ -43,7 +48,7 @@ struct packet {
 		struct {
 			char client_id[11];		// id of the client
 			uint8_t status;			// subscription status
-			char topic[50];			// subscription topic
+			char topic[51];			// subscription topic
 		} sub;
 		struct {
 			uint32_t udp_ip;		// UDP sensor ip
@@ -51,7 +56,7 @@ struct packet {
 			uint16_t len;			// payload length
 			char topic[50];			// sensor topic
 			uint8_t dtype;			// sensor data type
-			char payload[1500];		// sensor data contents
+			char payload[1501];		// sensor data contents
 		} data;
 	};
 
