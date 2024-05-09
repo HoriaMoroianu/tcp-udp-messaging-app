@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <poll.h>
+#include <string>
 
 #include "utils.h"
 
@@ -17,22 +18,16 @@ using namespace std;
 #define TYPE_INDEX 50
 #define DATA_INDEX 51
 
-#define MIN_PORT_VALUE 1024
-#define MAX_PORT_VALUE 65535
-
-struct client {
-	int fd;
-	char id[11];
-};
-
-uint16_t check_input_port(const char *raw_input_port);
-struct packet recv_sdata(int udpfd);
 void manage_server(int tcpfd, int udpfd);
-
+struct packet recv_sdata(int udpfd);
+string getid_by_fd(int fd, map<string, int> &active_conn);
+int read_from_stdin(vector<struct pollfd> &pfds);
+void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
+						map<string, int> &active_conn);
+void split_topic(char *topic, vector<string> &words);
 
 int main(int argc, char *argv[])
 {
-	cout << sizeof(packet);
 	// TODO: disble Nagle!
 
 	// Disable buffering
@@ -89,13 +84,34 @@ int main(int argc, char *argv[])
 
 void manage_server(int tcpfd, int udpfd)
 {
+	// Key: client_id; Value: client_fd
+	map<string, int> active_conn;
+
+	// Key: topic; Value: client_id
+	map<vector<string>, vector<string>> database;
+
 	vector<struct pollfd> pfds;
 	pfds.push_back({ STDIN_FILENO, POLLIN, 0 });
 	pfds.push_back({ tcpfd, POLLIN, 0 });
 	pfds.push_back({ udpfd, POLLIN, 0 });
 
 	while (1) {
-		cout << "Active conn:" << pfds.size() << "\n";
+		// TODO: remove
+		cout << "\nActive conn:" << pfds.size() << "\n";
+		cout << "Subs:" << database.size() << "\n";
+
+		// TODO: remove after working
+		// cout << "\n";
+		// for (auto pair : database) {
+		// 	cout << "Topic: ";
+		// 	for (auto word : pair.first)
+		// 		cout << word << " ";
+		// 	cout << "\nFds: ";
+		// 	for (auto fd : pair.second)
+		// 		cout << fd << " ";
+		// 	cout << "\n";
+		// }
+		// cout << "\n";
 
 		int poll_count = poll(pfds.data(), pfds.size(), -1);
 		DIE(poll_count == -1, "Server poll error");
@@ -105,95 +121,116 @@ void manage_server(int tcpfd, int udpfd)
 			if (!(pfds[i].revents & POLLIN))
 				continue;
 
-			// New tcp connection pending
-			if (pfds[i].fd == tcpfd) {
-				// Create client address structure
-				struct sockaddr_in conn_addr;
-				socklen_t caddr_len = sizeof(conn_addr);
-				memset(&conn_addr, 0, caddr_len);
-
-				// Accept connection from new client
-				int connfd = accept(tcpfd, (struct sockaddr *)&conn_addr, &caddr_len);
-				DIE(connfd == -1, "Connection failed!");				
-
-				// Add to poll fd
-				pfds.push_back({ connfd, POLLIN, 0 });
-
-				// TODO: id client
-
-				char con_adr_string[INET_ADDRSTRLEN];
-				printf("New client <ID_CLIENT> connected from %s:%hu.\n", 
-						inet_ntop(AF_INET, &conn_addr.sin_addr.s_addr, con_adr_string, INET_ADDRSTRLEN),
-						ntohs(conn_addr.sin_port));
-
+			// Input from stdin
+			if (pfds[i].fd == STDIN_FILENO) {
+				if (read_from_stdin(pfds))
+					return;
 				continue;
 			}
 
-			// Input from stdin
-			if (pfds[i].fd == STDIN_FILENO) {
-				char buff[MAX_BUFF];
-				bzero(buff, MAX_BUFF);
-
-				fgets(buff, MAX_BUFF, stdin);
-
-				if ((strncmp(buff, "exit", 4)) == 0) {
-					printf("Server Exit...\n");
-
-					for (struct pollfd pfd : pfds) {
-						if (pfd.fd != tcpfd && pfd.fd != STDIN_FILENO)
-							close(pfd.fd);
-					}
-					return;
-				}
+			// New TCP connection pending
+			if (pfds[i].fd == tcpfd) {
+				connect_tcp_client(tcpfd, pfds, active_conn);
 				continue;
 			}
 
 			// UDP message
 			if (pfds[i].fd == udpfd) {
 				struct packet sdata = recv_sdata(udpfd);
-
-				// printf("Udp port: %hu\ntopic: %s\ntype: %hu\ndata: %s", htons(sdata.udp_port), sdata.topic, sdata.dtype, sdata.data);
-
+				(void)sdata;
+				// TODO: sent to all clients
 				continue;
 			}
 
 			// Client:
 			struct packet pack;
-			memset(&pack, 0, sizeof(packet));
+			memset((void *)&pack, 0, sizeof(packet));
 
 			int rc = recv_packet(pfds[i].fd, &pack);
 			DIE(rc == -1, "Error when recieving message");
 
 			if (rc == 0) {
 				// Connection closed
-
-				// TODO: id client
-				printf("Client <ID_CLIENT> disconnected.\n");
+				string client_id = getid_by_fd(pfds[i].fd, active_conn);
+				cout << "Client " << client_id << " disconnected.\n";
 				close(pfds[i].fd);
+
 				pfds.erase(pfds.begin() + i);
+				active_conn.erase(client_id);
 
 				continue;
 			}
 
-			if (pack.type == CONNECT)
-				cout << "Client ID: " << pack.sub.client_id;
+			if (pack.type == FOLLOW) {
+				vector<string> topic;
+				split_topic(pack.sub.topic, topic);
+				vector<string>& clientsfd = database[topic];
+				auto pos = find(clientsfd.begin(), clientsfd.end(), pack.sub.client_id);
+
+				// TODO: unsubscribe for wildcards?
+				if (pack.sub.status == SUBSCRIBE) {
+					if (pos == clientsfd.end())
+						clientsfd.push_back(pack.sub.client_id);
+				} else {
+					if (pos != clientsfd.end())
+						clientsfd.erase(pos);
+				}
+				if (clientsfd.empty())
+					database.erase(topic);
+			}
 		}
 	}
 }
 
-uint16_t check_input_port(const char *raw_input_port)
+void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
+						map<string, int> &active_conn)
 {
-	int temp;
-	int rc = sscanf(raw_input_port, "%d", &temp);
-	DIE(rc != 1, "The port should be an integer!");
+	// Create client address structure
+	struct sockaddr_in conn_addr;
+	socklen_t caddr_len = sizeof(conn_addr);
+	memset(&conn_addr, 0, caddr_len);
 
-	if (temp >= MIN_PORT_VALUE && temp <= MAX_PORT_VALUE)
-		return (uint16_t)temp;
+	// Accept connection from new client
+	int connfd = accept(tcpfd, (struct sockaddr *)&conn_addr, &caddr_len);
+	DIE(connfd == -1, "Connection failed!");				
 
-	cerr << "The port should be between " << MIN_PORT_VALUE 
-			<< " and " << MAX_PORT_VALUE << "!\n";
+	// TODO: check already connected
+	struct packet pack;
+	memset((void *)&pack, 0, sizeof(packet));
+	int rc = recv_packet(connfd, &pack);
+	DIE(rc <= 0 || pack.type != CONNECT, "Connection failed!");
 
-	exit(EXIT_FAILURE);
+	if (active_conn.find(pack.sub.client_id) != active_conn.end()) {
+		cout << "Client " << pack.sub.client_id << " already connected.\n";
+		close(connfd);
+		return;
+	}
+
+	// Add to poll fd and active connections
+	pfds.push_back({ connfd, POLLIN, 0 });
+	active_conn.insert({ pack.sub.client_id, connfd});
+
+	char con_adr_string[INET_ADDRSTRLEN];
+	const char *ret = inet_ntop(AF_INET, &conn_addr.sin_addr.s_addr,
+								con_adr_string, INET_ADDRSTRLEN);
+	DIE(ret == NULL, "Invalid client IP!");
+
+	cout << "New client " << pack.sub.client_id 
+		 << " connected from " << con_adr_string 
+		 << ":" << ntohs(conn_addr.sin_port) << ".\n";
+}
+
+int read_from_stdin(vector<struct pollfd> &pfds)
+{
+	char buff[MAX_BUFF] = {0};
+	fgets(buff, MAX_BUFF, stdin);
+
+	if (!(strncmp(buff, "exit", 4))) {
+		for (size_t i = 3; i < pfds.size(); i++)
+			close(pfds[i].fd);
+		return 1;
+	}
+	return 0;
 }
 
 struct packet recv_sdata(int udpfd)
@@ -205,7 +242,8 @@ struct packet recv_sdata(int udpfd)
 	socklen_t caddr_len = sizeof(conn_addr);
 	memset(&conn_addr, 0, caddr_len);
 
-	ssize_t recv_bytes = recvfrom(udpfd, (char *)&buff, MAX_BUFF, 0, (struct sockaddr *)&conn_addr, &caddr_len);
+	ssize_t recv_bytes = recvfrom(udpfd, (char *)&buff, MAX_BUFF, 0, 
+								  (struct sockaddr *)&conn_addr, &caddr_len);
 	DIE(recv_bytes == -1, "Error when recieving message");
 
 	sdata.type = SDATA;
@@ -217,4 +255,22 @@ struct packet recv_sdata(int udpfd)
 	memcpy(&sdata.data, &buff[DATA_INDEX], sdata.data.len);
 
 	return sdata;
+}
+
+string getid_by_fd(int fd, map<string, int> &active_conn)
+{
+	for (auto pair : active_conn) {
+		if (pair.second == fd)
+			return pair.first;
+	}
+	return NULL;
+}
+
+void split_topic(char *topic, vector<string> &words)
+{
+	stringstream topic_stream(topic);
+	string word;
+
+	while (getline(topic_stream, word, '/'))
+		words.push_back(word);
 }

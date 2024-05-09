@@ -11,7 +11,7 @@ using namespace std;
 
 #define MAX_BUFF 1600
 
-void manage_connection(int serverfd);
+void manage_connection(int serverfd, char *myid);
 
 int main(int argc, char *argv[])
 {
@@ -48,19 +48,21 @@ int main(int argc, char *argv[])
 	rc = connect(serverfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
 	DIE(rc == -1, "Failed to connect to server!");
 
+	// Send client id to server
 	struct packet pack;
+	memset((void *)&pack, 0, sizeof(packet));
+
 	pack.type = CONNECT;
-	strcpy(pack.sub.client_id, argv[1]);
+	memcpy(pack.sub.client_id, argv[1], strlen(argv[1]));
 	send_packet(serverfd, &pack);
 
-	manage_connection(serverfd);
-
+	manage_connection(serverfd, argv[1]);
 	close(serverfd);
 
 	return 0;
 }
 
-void manage_connection(int serverfd)
+void manage_connection(int serverfd, char *myid)
 {
 	struct pollfd pfds[2];
 	pfds[0] = { serverfd, POLLIN, 0 };
@@ -87,19 +89,40 @@ void manage_connection(int serverfd)
 
 		// From stdin
 		if (pfds[1].revents & POLLIN) {
-			char buff[MAX_BUFF];
-			bzero(buff, MAX_BUFF);
+			char command[MAX_BUFF];
+			cin >> command;
 
-			fgets(buff, MAX_BUFF, stdin);
-			if (buff[strlen(buff) - 1] == '\n')
-				buff[strlen(buff) - 1] = '\0';
-
-			if ((strncmp(buff, "exit", 4)) == 0) {
-				printf("Client Exit...\n");
+			if ((strcmp(command, "exit")) == 0)
 				return;
+			
+			if (strcmp(command, "subscribe") == 0) {
+				packet pack;
+				memset((void *)&pack, 0, sizeof(packet));
+
+				pack.type = FOLLOW;
+				memcpy(pack.sub.client_id, myid, strlen(myid));
+				pack.sub.status = SUBSCRIBE;
+				cin >> pack.sub.topic;
+
+				int rc = send_packet(serverfd, &pack);
+				DIE(rc == -1, "Send failed!");
+				cout << "Subscribed to topic " << pack.sub.topic << "\n";
+				continue;
 			}
 
-			send(serverfd, buff, strlen(buff), 0);
+			if (strcmp(command, "unsubscribe") == 0) {
+				packet pack;
+				memset((void *)&pack, 0, sizeof(packet));
+
+				pack.type = FOLLOW;
+				memcpy(pack.sub.client_id, myid, strlen(myid));
+				pack.sub.status = UNSUBSCRIBE;
+				cin >> pack.sub.topic;
+
+				int rc = send_packet(serverfd, &pack);
+				DIE(rc == -1, "Send failed!");
+				cout << "Unsubscribed from topic " << pack.sub.topic << "\n";
+			}
 		}
 	}
 }

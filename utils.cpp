@@ -5,6 +5,8 @@
 
 #include "utils.h"
 
+using namespace std;
+
 ssize_t recv_packet(int sockfd, void *buffer)
 {
 	ssize_t recv_bytes = 0;
@@ -41,4 +43,19 @@ ssize_t send_packet(int sockfd, void *buffer)
 		bytes_remaining -= rc;
 	}
 	return sent_bytes;
+}
+
+uint16_t check_input_port(const char *raw_input_port)
+{
+	int temp;
+	int rc = sscanf(raw_input_port, "%d", &temp);
+	DIE(rc != 1, "The port should be an integer!");
+
+	if (temp >= MIN_PORT_VALUE && temp <= MAX_PORT_VALUE)
+		return (uint16_t)temp;
+
+	cerr << "The port should be between " << MIN_PORT_VALUE 
+		 << " and " << MAX_PORT_VALUE << "!\n";
+
+	exit(EXIT_FAILURE);
 }
