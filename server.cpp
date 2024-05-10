@@ -7,24 +7,9 @@
 #include <string>
 
 #include "utils.h"
+#include "server.h"
 
 using namespace std;
-
-#define MAX_UDP_BUFF 1600
-#define MAX_CONN_QUEUE 16
-
-#define TYPE_INDEX 50
-#define DATA_INDEX 51
-
-void manage_server(int tcpfd, int udpfd);
-bool recv_udp_data(int udpfd, struct packet &pack);
-string get_id(int fd, map<string, int> &active_conn);
-bool close_server(vector<struct pollfd> &pfds);
-void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
-						map<string, int> &active_conn);
-vector<string> split_topic(char *topic);
-bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic);
-bool check_payload(uint8_t type, uint8_t sign, ssize_t size);
 
 int main(int argc, char *argv[])
 {
@@ -71,9 +56,9 @@ int main(int argc, char *argv[])
 	manage_server(tcpfd, udpfd);
 
 	rc = close(tcpfd);
-	DIE(rc == -1, "Error when closing file descriptor");
+	DIE(rc == -1, "Error when closing file descriptor!");
 	rc = close(udpfd);
-	DIE(rc == -1, "Error when closing file descriptor");
+	DIE(rc == -1, "Error when closing file descriptor!");
 
 	return 0;
 }
@@ -92,7 +77,7 @@ void manage_server(int tcpfd, int udpfd)
 
 	while (1) {
 		int poll_count = poll(pfds.data(), pfds.size(), -1);
-		DIE(poll_count == -1, "Server poll error");
+		DIE(poll_count == -1, "Server poll error!");
 
 		for (int i = pfds.size() - 1; i >= 0; i--) {
 			// Check if someone's ready to read
@@ -118,28 +103,14 @@ void manage_server(int tcpfd, int udpfd)
 				if (!recv_udp_data(udpfd, pack))
 					continue;
 
-				vector<string> udptopic = split_topic(pack.data.topic);
-
-				set<string> registered;
-				for (auto pair : database) {
-					if (topic_match(udptopic, pair.first)) {
-						for (auto client_id : pair.second) {
-							if (active_conn.find(client_id) != active_conn.end() &&
-								registered.find(client_id) == registered.end()) {
-								int rc = send_packet(active_conn[client_id], &pack);
-								DIE(rc == -1, "Error when sending message");
-								registered.insert(client_id);
-							}
-						}
-					}
-				}
+				handle_udp(database, active_conn, pack);
 				continue;
 			}
 
 			// Client:
 			struct packet pack = { };
 			int rc = recv_packet(pfds[i].fd, &pack);
-			DIE(rc == -1, "Error when recieving message");
+			DIE(rc == -1, "Error when recieving message!");
 
 			if (rc == 0) {
 				// Connection closed
@@ -152,22 +123,9 @@ void manage_server(int tcpfd, int udpfd)
 				continue;
 			}
 
-			if (pack.type == FOLLOW) {
-				vector<string> topic = split_topic(pack.sub.topic);
-				vector<string>& clientsfd = database[topic];
-
-				auto pos = find(clientsfd.begin(), clientsfd.end(), pack.sub.client_id);
-
-				if (pack.sub.status == SUBSCRIBE) {
-					if (pos == clientsfd.end())
-						clientsfd.push_back(pack.sub.client_id);
-				} else {
-					if (pos != clientsfd.end())
-						clientsfd.erase(pos);
-				}
-				if (clientsfd.empty())
-					database.erase(topic);
-			}
+			if (pack.type == FOLLOW)
+				// Client wants to subscribe/unsubscribe
+				client_status_update(database, pack);
 		}
 	}
 }
@@ -211,6 +169,53 @@ void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
 		 << ":" << ntohs(conn_addr.sin_port) << ".\n";
 }
 
+void handle_udp(map<vector<string>, vector<string>> &database,
+				map<string, int> &active_conn,
+				struct packet &pack)
+{
+	vector<string> udptopic = split_topic(pack.data.topic);
+	set<string> registered; // keep track of sent messages
+
+	for (auto pair : database) {
+		if (!topic_match(udptopic, pair.first))
+			continue;
+
+		for (auto client_id : pair.second) {
+			if (active_conn.find(client_id) != active_conn.end() &&
+				registered.find(client_id) == registered.end()) {
+				// Active unnotified client
+				int rc = send_packet(active_conn[client_id], &pack);
+				DIE(rc == -1, "Error when sending message!");
+				registered.insert(client_id);
+			}
+		}
+	}
+}
+
+void client_status_update(map<vector<string>, vector<string>> &database,
+						  struct packet &pack)
+{
+	vector<string> topic = split_topic(pack.sub.topic);
+
+	// Get client fd
+	vector<string>& clientsfd = database[topic];
+	auto pos = find(clientsfd.begin(), clientsfd.end(), pack.sub.client_id);
+
+	if (pack.sub.status == SUBSCRIBE) {
+		if (pos == clientsfd.end())
+			// Subscribe only once
+			clientsfd.push_back(pack.sub.client_id);
+	} else {
+		if (pos != clientsfd.end())
+			// Unsubscribe if prev subscribed
+			clientsfd.erase(pos);
+	}
+
+	// Delete empty entries
+	if (clientsfd.empty())
+		database.erase(topic);
+}
+
 bool close_server(vector<struct pollfd> &pfds)
 {
 	string input;
@@ -228,25 +233,31 @@ bool recv_udp_data(int udpfd, struct packet &pack)
 {
 	char buff[MAX_UDP_BUFF] = {0};
 
+	// Create socket addr
 	struct sockaddr_in udp_addr;
 	socklen_t adr_len = sizeof(udp_addr);
 	memset(&udp_addr, 0, adr_len);
 
+	// Receive data
 	ssize_t recv_bytes = recvfrom(udpfd, (char *)&buff, MAX_UDP_BUFF, 0, 
 								  (struct sockaddr *)&udp_addr, &adr_len);
-	DIE(recv_bytes == -1, "Error when recieving message");
+	DIE(recv_bytes == -1, "Error when receiving message!");
 
+	// Parse data into packet
 	pack.type = DATA;
 	pack.data.udp_ip = udp_addr.sin_addr.s_addr;
 	pack.data.udp_port = udp_addr.sin_port;
 	memcpy(&pack.data.topic, buff, MAX_TOPIC_SIZE);
 
+	// Check for input errors
 	if (!check_payload(buff[TYPE_INDEX], buff[TYPE_INDEX + 1], recv_bytes) ||
 		!check_topic(pack.data.topic))
 		return false;
 
 	pack.data.dtype = buff[TYPE_INDEX];
 	memcpy(&pack.data.payload, &buff[DATA_INDEX], recv_bytes - MAX_TOPIC_SIZE);
+	
+	// Data received successfully
 	return true;
 }
 
@@ -290,26 +301,32 @@ bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic)
 
 		if (tcptopic[i] == "*") {
 			if (i == tcptopic.size() - 1)
+				// Ends in '*'
 				return true;
 
 			if (j == udptopic.size() - 1)
+				// Couldn't match anything after '*'
 				return false;
+
+			// Skip one level
 			i++;
 			j++;
+
+			// Find next match
 			auto it = find(udptopic.begin() + j, udptopic.end(), tcptopic[i]);
 
 			if (it == udptopic.end())
+				// Couldn't match anything after '*'
 				return false;
 
+			// Skip to next level
 			j = it - udptopic.begin();
 			continue;
 		}
+		// No match found
 		return false;
 	}
-
-	if (i == tcptopic.size() && j == udptopic.size())
-		return true;
-	return false;
+	return (i == tcptopic.size() && j == udptopic.size());
 }
 
 bool check_payload(uint8_t type, uint8_t sign, ssize_t size)
