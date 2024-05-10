@@ -75,3 +75,28 @@ uint16_t check_input_port(const char *raw_input_port)
 
 	exit(EXIT_FAILURE);
 }
+
+bool check_topic(const char *topic)
+{
+	for (size_t i = 0; i < strlen(topic); i++) {
+		if (topic[i] == ' ')
+			return false;
+
+		if (i == strlen(topic) - 1)
+			continue;
+
+		if (topic[i] == '/' && topic[i + 1] == '/')
+			return false;
+
+		if ((topic[i] == '*' || topic[i] == '+') && topic[i + 1] != '/')
+			return false;
+
+		if (i == strlen(topic) - 2)
+			continue;
+
+		if ((topic[i] == '*' || topic[i] == '+') && 
+			(topic[i + 2] == '*' || topic[i + 2] == '+'))
+			return false;
+	}
+	return true;
+}

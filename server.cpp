@@ -10,23 +10,21 @@
 
 using namespace std;
 
-#define MAX_BUFF 1600
-#define MAX_CONN_Q 16
+#define MAX_UDP_BUFF 1600
+#define MAX_CONN_QUEUE 16
 
-// TODO: fix this
-// UDP sensor...
-#define TOPIC_SIZE 50
 #define TYPE_INDEX 50
 #define DATA_INDEX 51
 
 void manage_server(int tcpfd, int udpfd);
-void recv_data(int udpfd, struct packet &pack);
-string getid_by_fd(int fd, map<string, int> &active_conn);
+bool recv_udp_data(int udpfd, struct packet &pack);
+string get_id(int fd, map<string, int> &active_conn);
 bool close_server(vector<struct pollfd> &pfds);
 void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
 						map<string, int> &active_conn);
-void split_topic(char *topic, vector<string> &words);
+vector<string> split_topic(char *topic);
 bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic);
+bool check_payload(uint8_t type, uint8_t sign, ssize_t size);
 
 int main(int argc, char *argv[])
 {
@@ -67,7 +65,7 @@ int main(int argc, char *argv[])
 	DIE(rc == -1, "Server bind failed!");
 
 	// Listen for connections
-	rc = listen(tcpfd, MAX_CONN_Q);
+	rc = listen(tcpfd, MAX_CONN_QUEUE);
 	DIE(rc == -1, "Server listen failed!");
 
 	manage_server(tcpfd, udpfd);
@@ -116,12 +114,11 @@ void manage_server(int tcpfd, int udpfd)
 
 			// UDP message
 			if (pfds[i].fd == udpfd) {
-				struct packet pack;
-				memset((void *)&pack, 0, sizeof(packet));
+				struct packet pack = { };
+				if (!recv_udp_data(udpfd, pack))
+					continue;
 
-				recv_data(udpfd, pack);
-				vector<string> udptopic;
-				split_topic(pack.data.topic, udptopic);
+				vector<string> udptopic = split_topic(pack.data.topic);
 
 				set<string> registered;
 				for (auto pair : database) {
@@ -146,7 +143,7 @@ void manage_server(int tcpfd, int udpfd)
 
 			if (rc == 0) {
 				// Connection closed
-				string client_id = getid_by_fd(pfds[i].fd, active_conn);
+				string client_id = get_id(pfds[i].fd, active_conn);
 				cout << "Client " << client_id << " disconnected.\n";
 				close(pfds[i].fd);
 
@@ -156,13 +153,11 @@ void manage_server(int tcpfd, int udpfd)
 			}
 
 			if (pack.type == FOLLOW) {
-				vector<string> topic;
-				split_topic(pack.sub.topic, topic);
-
+				vector<string> topic = split_topic(pack.sub.topic);
 				vector<string>& clientsfd = database[topic];
+
 				auto pos = find(clientsfd.begin(), clientsfd.end(), pack.sub.client_id);
 
-				// TODO: unsubscribe for wildcards?
 				if (pack.sub.status == SUBSCRIBE) {
 					if (pos == clientsfd.end())
 						clientsfd.push_back(pack.sub.client_id);
@@ -190,11 +185,12 @@ void connect_tcp_client(int tcpfd, vector<struct pollfd> &pfds,
 	DIE(connfd == -1, "Connection failed!");
 	disable_nagle(connfd);		
 
-	// TODO: check already connected
+	// Wait for client id
 	struct packet pack = { };
 	int rc = recv_packet(connfd, &pack);
 	DIE(rc == -1 || pack.type != CONNECT, "Connection failed!");
 
+	// Check if already connected
 	if (active_conn.find(pack.sub.client_id) != active_conn.end()) {
 		cout << "Client " << pack.sub.client_id << " already connected.\n";
 		close(connfd);
@@ -228,29 +224,33 @@ bool close_server(vector<struct pollfd> &pfds)
 	return false;
 }
 
-void recv_data(int udpfd, struct packet &pack)
+bool recv_udp_data(int udpfd, struct packet &pack)
 {
-	char buff[MAX_BUFF] = {0};
+	char buff[MAX_UDP_BUFF] = {0};
 
 	struct sockaddr_in udp_addr;
 	socklen_t adr_len = sizeof(udp_addr);
 	memset(&udp_addr, 0, adr_len);
 
-	ssize_t recv_bytes = recvfrom(udpfd, (char *)&buff, MAX_BUFF, 0, 
+	ssize_t recv_bytes = recvfrom(udpfd, (char *)&buff, MAX_UDP_BUFF, 0, 
 								  (struct sockaddr *)&udp_addr, &adr_len);
 	DIE(recv_bytes == -1, "Error when recieving message");
 
-	// TODO: check packet format
 	pack.type = DATA;
 	pack.data.udp_ip = udp_addr.sin_addr.s_addr;
 	pack.data.udp_port = udp_addr.sin_port;
-	pack.data.len = htons(recv_bytes - TOPIC_SIZE);
-	memcpy(&pack.data.topic, buff, TOPIC_SIZE);
+	memcpy(&pack.data.topic, buff, MAX_TOPIC_SIZE);
+
+	if (!check_payload(buff[TYPE_INDEX], buff[TYPE_INDEX + 1], recv_bytes) ||
+		!check_topic(pack.data.topic))
+		return false;
+
 	pack.data.dtype = buff[TYPE_INDEX];
-	memcpy(&pack.data.payload, &buff[DATA_INDEX], ntohs(pack.data.len));
+	memcpy(&pack.data.payload, &buff[DATA_INDEX], recv_bytes - MAX_TOPIC_SIZE);
+	return true;
 }
 
-string getid_by_fd(int fd, map<string, int> &active_conn)
+string get_id(int fd, map<string, int> &active_conn)
 {
 	for (auto pair : active_conn) {
 		if (pair.second == fd)
@@ -259,29 +259,19 @@ string getid_by_fd(int fd, map<string, int> &active_conn)
 	return NULL;
 }
 
-void split_topic(char *topic, vector<string> &words)
+vector<string> split_topic(char *topic)
 {
 	stringstream topic_stream(topic);
+	vector<string> words;
 	string word;
 
 	while (getline(topic_stream, word, '/'))
 		words.push_back(word);
+	return words;
 }
 
 bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic)
 {
-	// if (tcptopic.size() == 1 && tcptopic[0] == "*")
-	// 	return true;
-
-	// if (udptopic.size() != tcptopic.size())
-	// 	return false;
-
-	// for (size_t i = 0; i < udptopic.size(); i++) {
-	// 	if (udptopic[i] != tcptopic[i] && tcptopic[i] != "+" && tcptopic[i] != "*")
-	// 		return false;
-	// }
-	// return true;
-
 	size_t i = 0;
 	size_t j = 0;
 
@@ -304,25 +294,12 @@ bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic)
 
 			if (j == udptopic.size() - 1)
 				return false;
-
-			// cout << "caz de cautare\n";
-
-			// for (auto word : udptopic)
-			// 	cout << word << "|";
-			// cout << "\n";
-
-			// for (auto word : tcptopic)
-			// 	cout << word << "|";
-			// cout << "\n";
-
 			i++;
 			j++;
 			auto it = find(udptopic.begin() + j, udptopic.end(), tcptopic[i]);
 
 			if (it == udptopic.end())
 				return false;
-
-			// cout << "aici\n";
 
 			j = it - udptopic.begin();
 			continue;
@@ -332,5 +309,38 @@ bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic)
 
 	if (i == tcptopic.size() && j == udptopic.size())
 		return true;
+	return false;
+}
+
+bool check_payload(uint8_t type, uint8_t sign, ssize_t size)
+{
+	switch (type) {
+		case INT:
+			if (sign > 1)
+				return false;
+			if (size < 56)
+				return false;
+			return true;
+
+		case SHORT_REAL:
+			if (size < 53)
+				return false;
+			return true;
+
+		case FLOAT:
+			if (sign > 1)
+				return false;
+			if (size < 57)
+				return false;
+			return true;
+
+		case STRING:
+			if (size < 52)
+				return false;
+			return true;
+
+		default:
+			return false;
+	}
 	return false;
 }

@@ -42,6 +42,8 @@ using namespace std;
 #define MIN_PORT_VALUE 1024
 #define MAX_PORT_VALUE 65535
 
+#define MAX_TOPIC_SIZE 50
+
 struct packet {
 	uint8_t type;					// type of packet
 	union {
@@ -53,18 +55,11 @@ struct packet {
 		struct {
 			uint32_t udp_ip;		// UDP sensor ip
 			uint16_t udp_port;		// UDP sensor port
-			uint16_t len;			// payload length
 			char topic[51];			// sensor topic
 			uint8_t dtype;			// sensor data type
 			char payload[1501];		// sensor data contents
 		} data;
 	};
-
-	// // Default constructor
-	// packet() : type(0), data{} {}
-
-	// // Destructor
-    // ~packet() {}
 };
 
 ssize_t recv_packet(int sockfd, void *buffer);
@@ -72,5 +67,6 @@ ssize_t send_packet(int sockfd, void *buffer);
 void disable_nagle(int sockfd);
 void reusable_address(int sockfd);
 uint16_t check_input_port(const char *raw_input_port);
+bool check_topic(const char *topic);
 
 #endif

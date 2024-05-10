@@ -18,8 +18,7 @@ int main(int argc, char *argv[])
 	setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
 	DIE(argc != 4, "Usage: ./subscriber <CLIENT_ID> <SERVER_IP> <SERVER_PORT>");
-
-	// TODO: other user input errors
+	DIE(strlen(argv[1]) > 10, "Id should be at most 10 characters long!");
 
 	// Parse server ip
 	uint32_t server_ip;
@@ -49,7 +48,8 @@ int main(int argc, char *argv[])
 	struct packet pack = { };
 	pack.type = CONNECT;
 	memcpy(pack.sub.client_id, argv[1], strlen(argv[1]));
-	send_packet(serverfd, &pack);
+	rc = send_packet(serverfd, &pack);
+	DIE(rc == -1, "Failed to connect to server!");
 
 	manage_connection(serverfd, argv[1]);
 
@@ -97,7 +97,12 @@ void manage_connection(int serverfd, char *myid)
 				pack.type = FOLLOW;
 				memcpy(pack.sub.client_id, myid, strlen(myid));
 				pack.sub.status = SUBSCRIBE;
+
 				cin >> pack.sub.topic;
+				if (!check_topic(pack.sub.topic)) {
+					cerr << "Invalid topic!\n";
+					continue;
+				}
 
 				int rc = send_packet(serverfd, &pack);
 				DIE(rc == -1, "Send failed!");
@@ -111,7 +116,12 @@ void manage_connection(int serverfd, char *myid)
 				pack.type = FOLLOW;
 				memcpy(pack.sub.client_id, myid, strlen(myid));
 				pack.sub.status = UNSUBSCRIBE;
+
 				cin >> pack.sub.topic;
+				if (!check_topic(pack.sub.topic)) {
+					cerr << "Invalid topic!\n";
+					continue;
+				}
 
 				int rc = send_packet(serverfd, &pack);
 				DIE(rc == -1, "Send failed!");
