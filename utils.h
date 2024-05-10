@@ -54,7 +54,7 @@ struct packet {
 			uint32_t udp_ip;		// UDP sensor ip
 			uint16_t udp_port;		// UDP sensor port
 			uint16_t len;			// payload length
-			char topic[50];			// sensor topic
+			char topic[51];			// sensor topic
 			uint8_t dtype;			// sensor data type
 			char payload[1501];		// sensor data contents
 		} data;

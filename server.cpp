@@ -123,12 +123,15 @@ void manage_server(int tcpfd, int udpfd)
 				vector<string> udptopic;
 				split_topic(pack.data.topic, udptopic);
 
+				set<string> registered;
 				for (auto pair : database) {
 					if (topic_match(udptopic, pair.first)) {
 						for (auto client_id : pair.second) {
-							if (active_conn.find(client_id) != active_conn.end()) {
+							if (active_conn.find(client_id) != active_conn.end() &&
+								registered.find(client_id) == registered.end()) {
 								int rc = send_packet(active_conn[client_id], &pack);
 								DIE(rc == -1, "Error when sending message");
+								registered.insert(client_id);
 							}
 						}
 					}
@@ -155,6 +158,7 @@ void manage_server(int tcpfd, int udpfd)
 			if (pack.type == FOLLOW) {
 				vector<string> topic;
 				split_topic(pack.sub.topic, topic);
+
 				vector<string>& clientsfd = database[topic];
 				auto pos = find(clientsfd.begin(), clientsfd.end(), pack.sub.client_id);
 
@@ -240,11 +244,10 @@ void recv_data(int udpfd, struct packet &pack)
 	pack.type = DATA;
 	pack.data.udp_ip = udp_addr.sin_addr.s_addr;
 	pack.data.udp_port = udp_addr.sin_port;
-	pack.data.len = recv_bytes - TOPIC_SIZE;
+	pack.data.len = htons(recv_bytes - TOPIC_SIZE);
 	memcpy(&pack.data.topic, buff, TOPIC_SIZE);
 	pack.data.dtype = buff[TYPE_INDEX];
-	memcpy(&pack.data.payload, &buff[DATA_INDEX], pack.data.len);
-	pack.data.len = htons(pack.data.len);
+	memcpy(&pack.data.payload, &buff[DATA_INDEX], ntohs(pack.data.len));
 }
 
 string getid_by_fd(int fd, map<string, int> &active_conn)
@@ -267,12 +270,67 @@ void split_topic(char *topic, vector<string> &words)
 
 bool topic_match(const vector<string> &udptopic, const vector<string> &tcptopic)
 {
-	if (udptopic.size() != tcptopic.size())
+	// if (tcptopic.size() == 1 && tcptopic[0] == "*")
+	// 	return true;
+
+	// if (udptopic.size() != tcptopic.size())
+	// 	return false;
+
+	// for (size_t i = 0; i < udptopic.size(); i++) {
+	// 	if (udptopic[i] != tcptopic[i] && tcptopic[i] != "+" && tcptopic[i] != "*")
+	// 		return false;
+	// }
+	// return true;
+
+	size_t i = 0;
+	size_t j = 0;
+
+	while (i < tcptopic.size() && j < udptopic.size()) {
+		if (tcptopic[i] == udptopic[j]) {
+			i++;
+			j++;
+			continue;
+		}
+
+		if (tcptopic[i] == "+") {
+			i++;
+			j++;
+			continue;
+		}
+
+		if (tcptopic[i] == "*") {
+			if (i == tcptopic.size() - 1)
+				return true;
+
+			if (j == udptopic.size() - 1)
+				return false;
+
+			// cout << "caz de cautare\n";
+
+			// for (auto word : udptopic)
+			// 	cout << word << "|";
+			// cout << "\n";
+
+			// for (auto word : tcptopic)
+			// 	cout << word << "|";
+			// cout << "\n";
+
+			i++;
+			j++;
+			auto it = find(udptopic.begin() + j, udptopic.end(), tcptopic[i]);
+
+			if (it == udptopic.end())
+				return false;
+
+			// cout << "aici\n";
+
+			j = it - udptopic.begin();
+			continue;
+		}
 		return false;
-	
-	for (size_t i = 0; i < udptopic.size(); i++) {
-		if (udptopic[i] != tcptopic[i])
-			return false;
 	}
-	return true;
+
+	if (i == tcptopic.size() && j == udptopic.size())
+		return true;
+	return false;
 }

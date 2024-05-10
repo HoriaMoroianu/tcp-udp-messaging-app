@@ -147,6 +147,8 @@ string parse_payload(uint8_t type, char *payload)
 
 		uint32_t val;
 		memcpy(&val, &payload[1], sizeof(uint32_t));
+		if (val == 0)
+			output = "";
 		return output.append(to_string(ntohl(val)));
 	}
 
@@ -170,6 +172,9 @@ string parse_payload(uint8_t type, char *payload)
 		stringstream temp;
 		temp << fixed << setprecision(prec) 
 			 << (double)ntohl(val) / pow(10, prec);
+
+		if (val == 0)
+			output = "";
 		return output.append(temp.str());
 	}
 	// type == STRING
