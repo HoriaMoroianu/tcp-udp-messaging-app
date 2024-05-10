@@ -6,11 +6,9 @@
 #include <poll.h>
 
 #include "utils.h"
+#include "tcp_client.h"
 
 using namespace std;
-
-void manage_connection(int serverfd, char *myid);
-void unpack(struct packet &pack);
 
 int main(int argc, char *argv[])
 {
@@ -54,7 +52,7 @@ int main(int argc, char *argv[])
 	manage_connection(serverfd, argv[1]);
 
 	rc = close(serverfd);
-	DIE(rc == -1, "Error when closing file descriptor");
+	DIE(rc == -1, "Error when closing file descriptor!");
 
 	return 0;
 }
@@ -67,13 +65,13 @@ void manage_connection(int serverfd, char *myid)
 
 	while (1) {
 		int poll_count = poll(pfds, 2, -1);
-		DIE(poll_count == -1, "Subscriber poll error");
+		DIE(poll_count == -1, "Subscriber poll error!");
 
 		// From server
 		if (pfds[1].revents & POLLIN) {
 			struct packet pack = { };
 			int rc = recv_packet(serverfd, &pack);
-			DIE(rc == -1, "Error when recieving message");
+			DIE(rc == -1, "Error when receiving message!");
 
 			// Server disconected
 			if (rc == 0)
@@ -92,43 +90,52 @@ void manage_connection(int serverfd, char *myid)
 				return;
 			
 			if (command == "subscribe") {
-				struct packet pack = { };
-
-				pack.type = FOLLOW;
-				memcpy(pack.sub.client_id, myid, strlen(myid));
-				pack.sub.status = SUBSCRIBE;
-
-				cin >> pack.sub.topic;
-				if (!check_topic(pack.sub.topic)) {
-					cerr << "Invalid topic!\n";
-					continue;
-				}
-
-				int rc = send_packet(serverfd, &pack);
-				DIE(rc == -1, "Send failed!");
-				cout << "Subscribed to topic " << pack.sub.topic << "\n";
+				subscribe_command(serverfd, myid);
 				continue;
 			}
 
-			if (command == "unsubscribe") {
-				struct packet pack = { };
-
-				pack.type = FOLLOW;
-				memcpy(pack.sub.client_id, myid, strlen(myid));
-				pack.sub.status = UNSUBSCRIBE;
-
-				cin >> pack.sub.topic;
-				if (!check_topic(pack.sub.topic)) {
-					cerr << "Invalid topic!\n";
-					continue;
-				}
-
-				int rc = send_packet(serverfd, &pack);
-				DIE(rc == -1, "Send failed!");
-				cout << "Unsubscribed from topic " << pack.sub.topic << "\n";
-			}
+			if (command == "unsubscribe")
+				unsubscribe_command(serverfd, myid);
 		}
 	}
+}
+
+void subscribe_command(int serverfd, char *myid)
+{
+	struct packet pack = { };
+
+	pack.type = FOLLOW;
+	memcpy(pack.sub.client_id, myid, strlen(myid));
+	pack.sub.status = SUBSCRIBE;
+
+	cin >> pack.sub.topic;
+	if (!check_topic(pack.sub.topic)) {
+		cerr << "Invalid topic!\n";
+		return;
+	}
+
+	int rc = send_packet(serverfd, &pack);
+	DIE(rc == -1, "Send failed!");
+	cout << "Subscribed to topic " << pack.sub.topic << "\n";
+}
+
+void unsubscribe_command(int serverfd, char *myid)
+{
+	struct packet pack = { };
+
+	pack.type = FOLLOW;
+	memcpy(pack.sub.client_id, myid, strlen(myid));
+	pack.sub.status = UNSUBSCRIBE;
+
+	cin >> pack.sub.topic;
+	if (!check_topic(pack.sub.topic)) {
+		cerr << "Invalid topic!\n";
+		return;
+	}
+
+	int rc = send_packet(serverfd, &pack);
+	DIE(rc == -1, "Send failed!");
+	cout << "Unsubscribed from topic " << pack.sub.topic << "\n";
 }
 
 string get_data_type(uint8_t type)
@@ -150,15 +157,13 @@ string get_data_type(uint8_t type)
 string parse_payload(uint8_t type, char *payload)
 {
 	string output = "";
-
 	if (type == INT) {
-		if (payload[0] == 1)
-			output.append("-");
-
 		uint32_t val;
 		memcpy(&val, &payload[1], sizeof(uint32_t));
-		if (val == 0)
-			output = "";
+
+		if (payload[0] == 1 && val != 0)
+			output.append("-");
+
 		return output.append(to_string(ntohl(val)));
 	}
 
@@ -172,9 +177,6 @@ string parse_payload(uint8_t type, char *payload)
 	}
 
 	if (type == FLOAT) {
-		if (payload[0] == 1)
-			output.append("-");
-
 		uint32_t val;
 		memcpy(&val, &payload[1], sizeof(uint32_t));
 		int prec = (uint8_t)payload[5];
@@ -183,8 +185,9 @@ string parse_payload(uint8_t type, char *payload)
 		temp << fixed << setprecision(prec) 
 			 << (double)ntohl(val) / pow(10, prec);
 
-		if (val == 0)
-			output = "";
+		if (payload[0] == 1 && val != 0)
+			output.append("-");
+
 		return output.append(temp.str());
 	}
 	// type == STRING

@@ -3,37 +3,28 @@
 #ifndef _UTILS_H
 #define _UTILS_H
 
-#include <errno.h>
-#include <string.h>
-
+#include <bits/stdc++.h>
 using namespace std;
-
-#define DEB_DIE(assertion, call_description)	\
-	do {										\
-		if (assertion) {						\
-			fprintf(stderr, "(%s, %d): ",		\
-					__FILE__, __LINE__);		\
-			perror(call_description);			\
-			exit(errno);						\
-		}										\
-	} while (0)
 
 #define DIE(assertion, call_description)	\
 	do {									\
 		if (assertion) {					\
-			fprintf(stderr, "%s\n",			\
-					call_description);		\
+			cerr << call_description		\
+				 << "\n";					\
 			exit(errno);					\
 		}									\
 	} while (0)
 
+// Packet types
 #define CONNECT 1
 #define FOLLOW 2
 #define	DATA 3
 
+// Subscription status
 #define UNSUBSCRIBE 0
 #define SUBSCRIBE 1
 
+// Payload formats
 #define INT 0
 #define SHORT_REAL 1
 #define FLOAT 2
@@ -53,19 +44,21 @@ struct packet {
 			char topic[51];			// subscription topic
 		} sub;
 		struct {
-			uint32_t udp_ip;		// UDP sensor ip
-			uint16_t udp_port;		// UDP sensor port
-			char topic[51];			// sensor topic
-			uint8_t dtype;			// sensor data type
-			char payload[1501];		// sensor data contents
+			uint32_t udp_ip;		// UDP ip
+			uint16_t udp_port;		// UDP port
+			char topic[51];			// topic
+			uint8_t dtype;			// data type
+			char payload[1501];		// data contents
 		} data;
 	};
 };
 
 ssize_t recv_packet(int sockfd, void *buffer);
 ssize_t send_packet(int sockfd, void *buffer);
+
 void disable_nagle(int sockfd);
 void reusable_address(int sockfd);
+
 uint16_t check_input_port(const char *raw_input_port);
 bool check_topic(const char *topic);
 
